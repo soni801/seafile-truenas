@@ -1,0 +1,179 @@
+# -------------------------------------------------------------------------------------
+# USER CONFIGURATION
+# This section of the file contains the values you will need to edit to customise your
+# instance. You can read more about different configuration options in the Seafile
+# documentation, although do note that the variables are named slightly differently
+# in this deployment configuration.
+#
+# https://manual.seafile.com/latest/setup/setup_ce_by_docker/#getting-started
+# -------------------------------------------------------------------------------------
+x-common-data:
+  # Volume configuration
+  # ONLY EDIT THE VALUE BEFORE THE COLON (:). The value after the colon is the internal
+  # mount point in the respective Docker containers. This has to be included here because
+  # of a limitation in YAML aliases.
+  - &seafile_volume "/opt/seafile-data:/shared"
+  - &mysql_volume "/opt/seafile-mysql/db:/var/lib/mysql"
+  - &caddy_volume "/opt/seafile-caddy:/data/caddy"
+  - &seadoc_volume "/opt/seadoc-data:/shared"
+
+  # Database configuration
+  - &init_mysql_root_password "changeme"
+  - &mysql_db_password "changeme" # Password for the "seafile" db user (used internally)
+
+  # Server connection info
+  - &seafile_server_hostname "127.0.0.1" # The URL/IP you use to access the web interface, excluding port
+  - &seafile_server_protocol "http" # Either "http" or "https"
+  - &seafile_server_url "http://127.0.0.1" # The exact value of the entire URL, including both protocol and hostname
+  # ^ This has to be explicitly declared due to a limitation in YAML aliases.
+
+  # SeaDoc configuration
+  # SeaDoc is an extension of Seafile that providing an online collaborative document editor
+  # https://manual.seafile.com/latest/extension/setup_seadoc/
+  - &enable_seadoc "false" # Either "true" or "false"
+  - &seadoc_server_url "http://127.0.0.1/sdoc-server" # The same as &seafile_server_url, with "/sdoc-server" appended
+
+  # The initial administrator user account created upon first launch
+  - &init_seafile_admin_email "me@example.com"
+  - &init_seafile_admin_password "changeme"
+
+  # Misc.
+  - &time_zone "Europe/Oslo"
+  - &jwt_private_key "changeme"
+
+# -------------------------------------------------------------------------------------
+# DO NOT CHANGE ANYTHING UNDER THIS LINE UNLESS YOU KNOW WHAT YOU ARE DOING
+# The rest of this file is supposed to automatically populate copnfiguration values
+# based on the data provided above. If anything doesn't work as expected, please
+# submit an issue for me to look at the problem.
+# -------------------------------------------------------------------------------------
+
+services:
+
+  caddy:
+    image: lucaslorentz/caddy-docker-proxy:2.9-alpine
+    restart: unless-stopped
+    container_name: seafile-caddy
+    ports:
+      # You should probably leave these as is, unless you already use these ports for something else.
+      # Changing these ports shouldn't break anything if you really need to.
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_INGRESS_NETWORKS: seafile-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - *caddy_volume
+    networks:
+      - seafile-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:2019/metrics || exit 1"]
+      start_period: 20s
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  seadoc:
+    image: seafileltd/sdoc-server:1.0-latest
+    container_name: seadoc
+    volumes:
+      - *seadoc_volume
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: seafile
+      DB_PASSWORD: *mysql_db_password
+      DB_NAME: seahub_db
+      TIME_ZONE: *time_zone
+      JWT_PRIVATE_KEY: *jwt_private_key
+      NON_ROOT: false
+      SEAHUB_SERVICE_URL: *seafile_server_url
+    labels:
+      caddy: *seafile_server_url
+      caddy.@ws.0_header: "Connection *Upgrade*"
+      caddy.@ws.1_header: "Upgrade websocket"
+      caddy.0_reverse_proxy: "@ws {{upstreams 80}}"
+      caddy.1_handle_path: "/socket.io/*"
+      caddy.1_handle_path.0_rewrite: "* /socket.io{uri}"
+      caddy.1_handle_path.1_reverse_proxy: "{{upstreams 80}}"
+      caddy.2_handle_path: "/sdoc-server/*"
+      caddy.2_handle_path.0_rewrite: "* {uri}"
+      caddy.2_handle_path.1_reverse_proxy: "{{upstreams 80}}"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - seafile-net
+
+  db:
+    image: mariadb:10.11
+    container_name: seafile-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: *init_mysql_root_password
+      MYSQL_LOG_CONSOLE: true
+      MARIADB_AUTO_UPGRADE: 1
+    volumes:
+      - *mysql_volume
+    networks:
+      - seafile-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/usr/local/bin/healthcheck.sh",
+          "--connect",
+          "--mariadbupgrade",
+          "--innodb_initialized",
+        ]
+      interval: 20s
+      start_period: 30s
+      timeout: 5s
+      retries: 10
+
+  memcached:
+    image: memcached:1.6.29
+    container_name: seafile-memcached
+    entrypoint: memcached -m 256
+    networks:
+      - seafile-net
+
+  seafile:
+    image: seafileltd/seafile-mc:12.0-latest
+    container_name: seafile
+    volumes:
+      - *seafile_volume
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: seafile
+      DB_ROOT_PASSWD: *init_mysql_root_password
+      DB_PASSWORD: *mysql_db_password
+      SEAFILE_MYSQL_DB_CCNET_DB_NAME: ccnet_db
+      SEAFILE_MYSQL_DB_SEAFILE_DB_NAME: seafile_db
+      SEAFILE_MYSQL_DB_SEAHUB_DB_NAME: seahub_db
+      TIME_ZONE: *time_zone
+      INIT_SEAFILE_ADMIN_EMAIL: *init_seafile_admin_email
+      INIT_SEAFILE_ADMIN_PASSWORD: *init_seafile_admin_password
+      SEAFILE_SERVER_HOSTNAME: *seafile_server_hostname
+      SEAFILE_SERVER_PROTOCOL: *seafile_server_protocol
+      SITE_ROOT: /
+      NON_ROOT: false
+      JWT_PRIVATE_KEY: *jwt_private_key
+      SEAFILE_LOG_TO_STDOUT: false
+      ENABLE_SEADOC: *enable_seadoc
+      SEADOC_SERVER_URL: *seadoc_server_url
+    labels:
+      caddy: *seafile_server_url
+      caddy.reverse_proxy: "{{upstreams 80}}"
+    depends_on:
+      db:
+        condition: service_healthy
+      memcached:
+        condition: service_started
+    networks:
+      - seafile-net
+
+networks:
+  seafile-net:
+    name: seafile-net
+
