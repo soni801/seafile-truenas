@@ -27,6 +27,11 @@ x-common-data:
   - &seafile_server_url "http://127.0.0.1" # The exact value of the entire URL, including both protocol and hostname
   # ^ This has to be explicitly declared due to a limitation in YAML aliases.
 
+  # Port configuration
+  # Only edit the value before the colon, as the value after the colon once again references the internal port assignment
+  - &port_http "8080:80"
+  - &port_https "9443:443"
+
   # SeaDoc configuration
   # SeaDoc is an extension of Seafile that providing an online collaborative document editor
   # https://manual.seafile.com/latest/extension/setup_seadoc/
@@ -55,10 +60,8 @@ services:
     restart: unless-stopped
     container_name: seafile-caddy
     ports:
-      # You should probably leave these as is, unless you already use these ports for something else.
-      # Changing these ports shouldn't break anything if you really need to.
-      - "80:80"
-      - "443:443"
+      - *port_http
+      - *port_https
     environment:
       CADDY_INGRESS_NETWORKS: seafile-net
     volumes:
