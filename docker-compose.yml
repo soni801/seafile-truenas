@@ -29,8 +29,8 @@ x-common-data:
 
   # Port configuration
   # Only edit the value before the colon, as the value after the colon once again references the internal port assignment
-  - &port_http "8080:80"
-  - &port_https "9443:443"
+  - &port_http "30022:80"
+  - &port_https "30023:443"
 
   # SeaDoc configuration
   # SeaDoc is an extension of Seafile that providing an online collaborative document editor
@@ -64,6 +64,11 @@ services:
       - *port_https
     environment:
       CADDY_INGRESS_NETWORKS: seafile-net
+    # Add some configuration to caddy to make it cooperate better with TrueNAS
+    labels:
+      caddy.auto_https: disable_redirects
+      caddy.default_sni: *seafile_server_hostname
+      caddy.local_certs:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - *caddy_volume
